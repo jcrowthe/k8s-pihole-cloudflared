@@ -1,0 +1,136 @@
+apiVersion: v1
+data:
+  # Modify this to set any custom DNS entries
+  02-custom.conf: |
+    address=/foo.bar.com/192.168.1.29
+kind: ConfigMap
+metadata:
+  name: pihole-custom-dnsmasq
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  labels:
+    app: pihole
+  name: pihole
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pihole
+  template:
+    metadata:
+      labels:
+        app: pihole
+    spec:
+      containers:
+      - image: visibilityspots/cloudflared:amd64
+        imagePullPolicy: IfNotPresent
+        name: cloudflared
+        ports:
+        - containerPort: 5054
+          name: dns
+          protocol: TCP
+        - containerPort: 5054
+          name: dns-udp
+          protocol: UDP
+        env:
+        - name: TUNNEL_METRICS
+          value: 127.0.0.1:3000
+      - env:
+        - name: ServerIP
+          value: 192.168.100.75 # MODIFY THIS TO YOUR PIHOLE-UDP SVC IP
+        - name: DNS1
+          value: 127.0.0.1#5054
+        - name: DNS2
+          value: 127.0.0.1#5054
+        image: pihole/pihole:latest
+        imagePullPolicy: IfNotPresent
+        name: pihole
+        ports:
+        - containerPort: 80
+          name: pihole-http
+          protocol: TCP
+        - containerPort: 53
+          name: dns
+          protocol: TCP
+        - containerPort: 53
+          name: dns-udp
+          protocol: UDP
+        - containerPort: 443
+          name: pihole-ssl
+          protocol: TCP
+        - containerPort: 67
+          name: client-udp
+          protocol: UDP
+        volumeMounts:
+        - mountPath: /etc/pihole
+          name: config
+        - mountPath: /etc/dnsmasq.d/02-custom.conf
+          name: custom-dnsmasq
+          subPath: 02-custom.conf
+        securityContext:
+          capabilities:
+            add: ["NET_ADMIN"]
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      volumes:
+      - name: config
+        hostPath:
+          path: /path/to/persistent/volume/pihole # Modify this to a local path, or PVC
+          type: Directory
+      - configMap:
+          defaultMode: 420
+          name: pihole-custom-dnsmasq
+        name: custom-dnsmasq
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: pihole
+  name: pihole-udp
+spec:
+  ports:
+  - name: dns-udp
+    nodePort: 30482
+    port: 53
+    protocol: UDP
+    targetPort: dns-udp
+  - name: client-udp
+    nodePort: 31077
+    port: 67
+    protocol: UDP
+    targetPort: client-udp
+  selector:
+    app: pihole
+  sessionAffinity: None
+  type: NodePort
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: pihole
+  name: pihole
+spec:
+  ports:
+  - name: pihole-http
+    nodePort: 31173
+    port: 80
+    protocol: TCP
+    targetPort: pihole-http
+  - name: pihole-https
+    nodePort: 32320
+    port: 443
+    protocol: TCP
+    targetPort: pihole-https
+  - name: dns
+    nodePort: 31795
+    port: 53
+    protocol: TCP
+    targetPort: dns
+  selector:
+    app: pihole
+  sessionAffinity: None
+  type: NodePort
